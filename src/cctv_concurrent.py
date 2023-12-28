@@ -1,3 +1,5 @@
+# main_script.py
+
 from transformers import DetrImageProcessor, DetrForObjectDetection
 import torch
 from PIL import Image
@@ -6,69 +8,95 @@ from utils.env_handler import EnvHandler
 import concurrent.futures
 import time
 import imutils
+from utils.telegram_alert import TelegramAlert
+import asyncio
 
-# Load environment configs
-config = EnvHandler()
 
-# Load the pre-trained processor and model
-processor = DetrImageProcessor.from_pretrained("facebook/detr-resnet-50", revision="no_timm")
-model = DetrForObjectDetection.from_pretrained("facebook/detr-resnet-50", revision="no_timm")
+class PersonDetectionAlert:
 
-# Replace 'your_camera_rtsp_url' with the actual RTSP URL of your camera
-camera_url = f'rtsp://{config.camera_id}:{config.camera_password}@{config.camera_ip}:{config.camera_port}/cam/realmonitor?channel=3&subtype=1'
-cap = cv2.VideoCapture(camera_url)
+    def __init__(self):
+        # Load environment configs
+        self.config = EnvHandler()
 
-def process_frame(frame):
-    # Resize the frame for better performance
-    frame = imutils.resize(frame, width=800)
+        # Load the pre-trained processor and model
+        self.processor = DetrImageProcessor.from_pretrained("facebook/detr-resnet-50", revision="no_timm")
+        self.model = DetrForObjectDetection.from_pretrained("facebook/detr-resnet-50", revision="no_timm")
 
-    # Convert the frame to PIL Image
-    image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+        # self.camera_url = f'rtsp://{self.config.camera_id}:{self.config.camera_password}@{self.config.camera_ip}:{self.config.camera_port}/cam/realmonitor?channel={self.config.camera_channel}&subtype=1'
+        self.camera_url = f'rtsp://{self.config.camera_id}:{self.config.camera_password}@{self.config.camera_ip}:{self.config.camera_port}/cam/realmonitor?channel={self.config.camera_channel}&subtype=0&unicast=true&proto=Onvif'
 
-    # Process the image with the DETR model
-    inputs = processor(images=image, return_tensors="pt")
-    outputs = model(**inputs)
+        # Initialize Telegram alert system
+        self.telegram_alert = TelegramAlert(
+            bot_token=self.config.telegram_bot_token,
+            chat_id=self.config.telegram_bot_channel_id)
 
-    # Convert outputs to COCO API format
-    target_sizes = torch.tensor([image.size[::-1]])
-    results = processor.post_process_object_detection(outputs, target_sizes=target_sizes, threshold=0.9)[0]
+    async def process_frame(self, frame):
+        # Resize the frame for better performance
+        frame = imutils.resize(frame, width=800)
 
-    # Draw bounding boxes on the frame for detected persons
-    for score, label, box in zip(results["scores"], results["labels"], results["boxes"]):
-        box = [round(i, 2) for i in box.tolist()]
+        # Convert the frame to PIL Image
+        image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
 
-        # Check if the detected object is a person (label ID 1)
-        if label.item() == 1:
-            label_str = model.config.id2label[label.item()]
-            confidence_str = round(score.item(), 3)
+        # Process the image with the DETR model
+        inputs = self.processor(images=image, return_tensors="pt")
+        outputs = self.model(**inputs)
 
-            # Get the current system time
-            current_time = time.strftime("%Y-%m-%d %H:%M:%S")
+        # Convert outputs to COCO API format
+        target_sizes = torch.tensor([image.size[::-1]])
+        results = self.processor.post_process_object_detection(outputs, target_sizes=target_sizes, threshold=0.9)[0]
 
-            # Print the system time when a person is detected
-            print(f"Person detected at {current_time}, Confidence: {confidence_str}")
+        # Draw bounding boxes on the frame for detected persons
+        for score, label, box in zip(results["scores"], results["labels"], results["boxes"]):
+            box = [round(i, 2) for i in box.tolist()]
 
-            # Draw bounding box and label on the frame
-            cv2.rectangle(frame, (int(box[0]), int(box[1])), (int(box[2]), int(box[3])), (0, 255, 0), 2)
-            cv2.putText(frame, f"{label_str} {confidence_str}", (int(box[0]), int(box[1]) - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+            # Check if the detected object is a person (label ID 1)
+            if label.item() == 1:
+                label_str = self.model.config.id2label[label.item()]
+                confidence_str = round(score.item(), 3)
 
-    # Display the resulting frame
-    cv2.imshow('Object Detection', frame)
+                # Get the current system time
+                current_time = time.strftime("%Y-%m-%d %H:%M:%S")
 
-while True:
-    ret, frame = cap.read()
+                alert_message = f"Person detected at {current_time}\nConfidence: {confidence_str}"
 
-    if not ret:
-        print("Video stream ended.")
-        break
+                # Print the system time when a person is detected
+                print(alert_message)
 
-    # Submit the frame processing task to the executor
-    process_frame(frame)
+                # Send a Telegram alert
+                await self.telegram_alert.send_alert(alert_message)
 
-    if cv2.waitKey(1) & 0xFF == ord('q'):
-        break
+                # Draw bounding box and label on the frame
+                cv2.rectangle(frame, (int(box[0]), int(box[1])), (int(box[2]), int(box[3])), (0, 255, 0), 2)
+                cv2.putText(frame, f"{label_str} {confidence_str}", (int(box[0]), int(box[1]) - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
-# Release the video capture object and close the window
-cap.release()
-cv2.destroyAllWindows()
+        # Display the resulting frame
+        cv2.imshow('Object Detection', frame)
+
+    async def run_detection(self):
+        cap = cv2.VideoCapture(self.camera_url)
+
+        while True:
+            ret, frame = cap.read()
+
+            if not ret:
+                print("Video stream ended.")
+                break
+
+            # Submit the frame processing task to the executor
+            await self.process_frame(frame)
+
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+
+        # Release the video capture object and close the window
+        cap.release()
+        cv2.destroyAllWindows()
+
+
+if __name__ == "__main__":
+    alert_system = PersonDetectionAlert()
+
+    # Ensure the event loop is created (if not using an existing one)
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(alert_system.run_detection())
