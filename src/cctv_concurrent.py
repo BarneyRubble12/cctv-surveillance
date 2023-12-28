@@ -5,11 +5,11 @@ import torch
 from PIL import Image
 import cv2
 from utils.env_handler import EnvHandler
-import concurrent.futures
 import time
 import imutils
 from utils.telegram_alert import TelegramAlert
 import asyncio
+import os
 
 
 class PersonDetectionAlert:
@@ -29,6 +29,19 @@ class PersonDetectionAlert:
         self.telegram_alert = TelegramAlert(
             bot_token=self.config.telegram_bot_token,
             chat_id=self.config.telegram_bot_channel_id)
+
+    async def send_telegram_alert(self, message, frame):
+        image_path = f'{self.config.telegram_message_photo_path}/detected_person.jpg'
+        try:
+            self.ensure_directory_exists(self.config.telegram_message_photo_path)
+            cv2.imwrite(image_path, frame)
+            await self.telegram_alert.send_alert(message, image_path)
+        except Exception as e:
+            print(f'Error sending Telegram alert: {e}')
+        finally:
+            # Clean up: Remove the saved image
+            if os.path.exists(image_path):
+                os.remove(image_path)
 
     async def process_frame(self, frame):
         # Resize the frame for better performance
@@ -57,13 +70,13 @@ class PersonDetectionAlert:
                 # Get the current system time
                 current_time = time.strftime("%Y-%m-%d %H:%M:%S")
 
-                alert_message = f"Person detected at {current_time}\nConfidence: {confidence_str}"
+                alert_message = f"¡¡¡Auauuuuuuuu!!! Intruso detectado a las {current_time}\nConfidence: {confidence_str}"
 
                 # Print the system time when a person is detected
                 print(alert_message)
 
                 # Send a Telegram alert
-                await self.telegram_alert.send_alert(alert_message)
+                await self.send_telegram_alert(alert_message, frame)
 
                 # Draw bounding box and label on the frame
                 cv2.rectangle(frame, (int(box[0]), int(box[1])), (int(box[2]), int(box[3])), (0, 255, 0), 2)
@@ -92,6 +105,12 @@ class PersonDetectionAlert:
         # Release the video capture object and close the window
         cap.release()
         cv2.destroyAllWindows()
+
+    def ensure_directory_exists(self, directory_path):
+        # Check if the directory exists
+        if not os.path.exists(directory_path):
+            # Create the directory if it doesn't exist
+            os.makedirs(directory_path)
 
 
 if __name__ == "__main__":

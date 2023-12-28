@@ -15,3 +15,4 @@ class EnvHandler:
 
         self.telegram_bot_channel_id = os.getenv('TELEGRAM_BOT_CHANNEL_ID')
         self.telegram_bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
+        self.telegram_message_photo_path = os.getenv("TELEGRAM_MESSAGE_PHOTO_PATH")
